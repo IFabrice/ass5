@@ -13,6 +13,9 @@ from cougarnet.sim.host import BaseHost
 from prefix import *
 from mysocket import UDPSocket
 from transporthost import TransportHost
+# from forwarding_table_native import ForwardingTableNative as ForwardingTable
+from forwarding_table import ForwardingTable
+
 
 class DVRouter(TransportHost):
     def __init__(self):
@@ -22,11 +25,14 @@ class DVRouter(TransportHost):
         self.neighbor_dvs = {}
 
         self._dv_socks = {}
+        self.forwarding_table = ForwardingTable()
 
         # Forwarding table is initialized in Host.__init__();
         # Host is an ancestor class that handles IP Forwarding
 
         self._initialize_dv_sock()
+        self._link_down_alarm = {}
+        self._neighbor_name_to_ip = {}
 
         # Do any further initialization here
 
@@ -67,6 +73,9 @@ class DVRouter(TransportHost):
         being used for DV messages.
         '''
 
+        # import pdb
+        # pdb.set_trace()
+
         for intf in self._dv_socks:
             #XXX This check for non-zero buffer should go in recvfrom()
             if self._dv_socks[intf].buffer:
@@ -78,12 +87,28 @@ class DVRouter(TransportHost):
 
         #XXX We should probably use the correct socket in the future, but this
         # will work for now
+
+
         for intf in self._dv_socks:
             self._dv_socks[intf].sendto(msg, dst, DV_PORT)
             break
 
     def handle_dv_message(self, msg: bytes) -> None:
-        pass
+        d = json.loads(msg.decode('utf-8'))
+        neighbor_name = d['name']
+        neighbor_ip = d['ip']
+        if neighbor_name == self.hostname:
+            return
+
+        self._neighbor_name_to_ip[neighbor_name] = neighbor_ip
+
+        # do the rest here...
+        self.neighbor_dvs[neighbor_name] = d['dv']
+
+        if neighbor_name in self._link_down_alarm:
+            self._link_down_alarm[neighbor_name].cancel()
+        loop = asyncio.get_event_loop()
+        self._link_down_alarm[neighbor_name] = loop.call_later(NEIGHBOR_CHECK_INTERVAL, self.handle_down_link, neighbor_name)
 
     def send_dv_next(self):
         '''Send DV to neighbors, and schedule this method to be called again in
@@ -105,6 +130,7 @@ class DVRouter(TransportHost):
 
     def handle_down_link(self, neighbor: str):
         self.log(f'Link down: {neighbor}')
+        del self.neighbor_dvs[neighbor]
 
     def resolve_neighbor_dvs(self):
         '''Return a copy of the mapping of neighbors to distance vectors, with
@@ -132,17 +158,55 @@ class DVRouter(TransportHost):
         return resolved_dv
 
     def update_dv(self) -> None:
-        pass
+        forwarding_table = {}
 
-    def bcast_for_int(self, intf: str) -> str:
-        ip_int = ip_str_to_int(self.int_to_info[intf].ipv4_addrs[0])
-        ip_prefix_int = ip_prefix(ip_int, socket.AF_INET, self.int_to_info[intf].ipv4_prefix_len)
-        ip_bcast_int = ip_prefix_last_address(ip_prefix_int, socket.AF_INET, self.int_to_info[intf].ipv4_prefix_len)
-        bcast = ip_int_to_str(ip_bcast_int, socket.AF_INET)
-        return bcast
+        # get neighbor costs
+        neighbor_costs = dict([(n, 1) for n in self.neighbor_dvs])
+
+        # initialize DV with distance 0 to own IP addresses
+
+        dv = {}
+
+        for intinfo in self.int_to_info.values():
+            if intinfo.ipv4_addrs:
+                ip_int = ip_str_to_int(intinfo.ipv4_addrs[0])
+                ip_prefix_int = ip_prefix(ip_int,socket.AF_INET, intinfo.ipv4_prefix_len)
+                ip_prefix_str = ip_int_to_str(ip_prefix_int, socket.AF_INET)
+                dv[ip_prefix_str] = 0
+                
+        # dv = dict([(intinfo.ipv4_addrs[0], 0) \
+        #         for intinfo in self.int_to_info.values() if intinfo.ipv4_addrs])
+
+        for neighbor in self.neighbor_dvs:
+            table = self.neighbor_dvs[neighbor]
+            for dst in table:
+                distance = table[dst] + neighbor_costs[neighbor]
+                if dst not in dv or distance < dv[dst]:
+                    dv[dst] = distance
+                    # don't try to add a route for local
+                    forwarding_table[dst] = self._neighbor_name_to_ip[neighbor]
+
+        if dv == self.my_dv:
+            send_new_dv = False
+        else:
+            send_new_dv = True
+
+        self.my_dv = dv
+        if send_new_dv:
+            self.forwarding_table.flush()
+            for dst in forwarding_table:
+                self.forwarding_table.add_entry(dst, None, forwarding_table[dst])
+
 
     def send_dv(self) -> None:
-        print('Sending DV')
+
+        for intf in self.physical_interfaces:
+            d = { 'name': self.hostname,
+                    'ip': self.int_to_info[intf].ipv4_addrs[0],
+                    'dv': self.my_dv }
+            d_json = json.dumps(d).encode('utf-8')
+            bcast = self.bcast_for_int(intf)
+            self._send_msg(d_json, bcast)
 
 def main():
     router = DVRouter()

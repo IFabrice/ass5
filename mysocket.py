@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import struct
 
 TCP_FLAGS_SYN = 0x02
 TCP_FLAGS_RST = 0x04
@@ -25,6 +26,9 @@ from headers import IPv4Header, UDPHeader, TCPHeader, \
         IP_HEADER_LEN, UDP_HEADER_LEN, TCP_HEADER_LEN, \
         TCPIP_HEADER_LEN, UDPIP_HEADER_LEN
 
+from cougarnet.util import \
+        ip_str_to_binary, ip_binary_to_str
+
 
 #From /usr/include/linux/in.h:
 IPPROTO_TCP = 6 # Transmission Control Protocol
@@ -43,17 +47,40 @@ class UDPSocket:
         self.buffer = []
 
     def handle_packet(self, pkt: bytes) -> None:
-        self.buffer.append((b'', '0.0.0.0', 0))
+        ip_hdr = IPv4Header.from_bytes(pkt[:IP_HEADER_LEN])
+        udp_hdr = UDPHeader.from_bytes(pkt[IP_HEADER_LEN:UDPIP_HEADER_LEN])
+        data = pkt[UDPIP_HEADER_LEN:]
+
+        self.buffer.append((data, ip_hdr.src, udp_hdr.sport))
         self._notify_on_data()
 
     @classmethod
     def create_packet(cls, src: str, sport: int, dst: str, dport: int,
             data: bytes=b'') -> bytes:
-        pass
+
+        data_len = len(data)
+        pkt_len = UDPIP_HEADER_LEN + data_len
+        pkt_ttl = 64
+
+        # Create the IP header
+        ip_hdr = IPv4Header(pkt_len, pkt_ttl, IPPROTO_UDP, 0, src, dst)
+        ip_hdr_bytes = ip_hdr.to_bytes()
+        
+        # UDP header
+        udp_hdr = UDPHeader(sport, dport, UDP_HEADER_LEN + data_len, 0)
+        udp_hdr_bytes = udp_hdr.to_bytes()
+
+        return ip_hdr_bytes + udp_hdr_bytes + data
 
     def send_packet(self, remote_addr: str, remote_port: int,
             data: bytes) -> None:
-        pass
+        
+        import pdb
+        pdb.set_trace()
+
+        pkt = self.create_packet(self._local_addr, self._local_port,
+                remote_addr, remote_port, data)
+        self._send_ip_packet(pkt)
 
     def recvfrom(self) -> tuple[bytes, str, int]:
         return self.buffer.pop(0)
