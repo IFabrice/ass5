@@ -75,8 +75,6 @@ class UDPSocket:
     def send_packet(self, remote_addr: str, remote_port: int,
             data: bytes) -> None:
         
-        import pdb
-        pdb.set_trace()
 
         pkt = self.create_packet(self._local_addr, self._local_port,
                 remote_addr, remote_port, data)

@@ -25,7 +25,7 @@ class DVRouter(TransportHost):
         self.neighbor_dvs = {}
 
         self._dv_socks = {}
-        self.forwarding_table = ForwardingTable()
+        # self.forwarding_table = ForwardingTable()
 
         # Forwarding table is initialized in Host.__init__();
         # Host is an ancestor class that handles IP Forwarding
@@ -171,12 +171,9 @@ class DVRouter(TransportHost):
             if intinfo.ipv4_addrs:
                 ip_int = ip_str_to_int(intinfo.ipv4_addrs[0])
                 ip_prefix_int = ip_prefix(ip_int,socket.AF_INET, intinfo.ipv4_prefix_len)
-                ip_prefix_str = ip_int_to_str(ip_prefix_int, socket.AF_INET)
+                ip_prefix_str = ip_int_to_str(ip_prefix_int, socket.AF_INET) + "/" + str(intinfo.ipv4_prefix_len)
                 dv[ip_prefix_str] = 0
                 
-        # dv = dict([(intinfo.ipv4_addrs[0], 0) \
-        #         for intinfo in self.int_to_info.values() if intinfo.ipv4_addrs])
-
         for neighbor in self.neighbor_dvs:
             table = self.neighbor_dvs[neighbor]
             for dst in table:
